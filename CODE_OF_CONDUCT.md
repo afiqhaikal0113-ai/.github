@@ -1,133 +1,624 @@
-# Contributor Covenant Code of Conduct
+#include <Keypad.h>
+#include <Servo.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 
-## Our Pledge
+#define RED_LED 2
+#define GREEN_LED 13
+#define SERVO_PIN 11
+#define BUZZER_PIN 12
+#define TRIG_PIN A1
+#define ECHO_PIN A2
 
-We as members, contributors, and leaders pledge to make participation in our
-community a harassment-free experience for everyone, regardless of age, body
-size, visible or invisible disability, ethnicity, sex characteristics, gender
-identity and expression, level of experience, education, socio-economic status,
-nationality, personal appearance, race, caste, color, religion, or sexual
-identity and orientation.
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+Servo lockServo;
 
-We pledge to act and interact in ways that contribute to an open, welcoming,
-diverse, inclusive, and healthy community.
+// ============================
+// KEYPAD
+// ============================
 
-## Our Standards
+const byte ROWS = 4;
+const byte COLS = 4;
 
-Examples of behavior that contributes to a positive environment for our
-community include:
+char keys[ROWS][COLS] = {
+  {'1', '2', '3', 'A'},
+  {'4', '5', '6', 'B'},
+  {'7', '8', '9', 'C'},
+  {'*', '0', '#', 'D'}
+};
 
-* Demonstrating empathy and kindness toward other people
-* Being respectful of differing opinions, viewpoints, and experiences
-* Giving and gracefully accepting constructive feedback
-* Accepting responsibility and apologizing to those affected by our mistakes,
-  and learning from the experience
-* Focusing on what is best not just for us as individuals, but for the overall
-  community
+byte rowPins[ROWS] = {3, 4, 5, 6};
+byte colPins[COLS] = {7, 8, 9, 10};
 
-Examples of unacceptable behavior include:
+Keypad keypad = Keypad(
+  makeKeymap(keys),
+  rowPins,
+  colPins,
+  ROWS,
+  COLS
+);
 
-* The use of sexualized language or imagery, and sexual attention or advances of
-  any kind
-* Trolling, insulting or derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or email address,
-  without their explicit permission
-* Other conduct which could reasonably be considered inappropriate in a
-  professional setting
+// ============================
+// PASSWORD
+// ============================
 
-## Enforcement Responsibilities
+String correctPIN = "0000";
+String enteredPIN = "";
+String newPIN = "";
 
-* Community leaders are responsible for clarifying and enforcing our standards of
-  acceptable behavior and will take appropriate and fair corrective action in
-  response to any behavior that they deem inappropriate, threatening, offensive,
-  or harmful.
+bool changingPIN = false;
 
-* Community leaders have the right and responsibility to remove, edit, or reject
-  comments, commits, code, wiki edits, issues, and other contributions that are
-  not aligned to this Code of Conduct, and will communicate reasons for moderation
-  decisions when appropriate.
+// ============================
+// SYSTEM STATUS
+// ============================
 
-## Scope
+bool systemOn = false;
+bool safeUnlocked = false;
+bool leavingTimer = false;
+bool personAwayWarning = false;
 
-* This Code of Conduct applies within all community spaces, and also applies when
-  an individual is officially representing the community in public spaces.
-  Examples of representing our community include using an official e-mail address,
-  posting via an official social media account, or acting as an appointed
-  representative at an online or offline event.
+unsigned long leaveStartTime = 0;
+unsigned long lastWarningBeep = 0;
+unsigned long lastADCRead = 0;
 
-## Enforcement
+const unsigned long OFF_DELAY = 5000;
+const unsigned long WARNING_INTERVAL = 1000;
+const unsigned long ADC_INTERVAL = 500;
 
-* Instances of abusive, harassing, or otherwise unacceptable behavior may be
-  reported to the community leaders responsible for enforcement at
-  support@github.com.
- 
-* All complaints will be reviewed and investigated promptly and fairly.
+const int DETECT_DISTANCE = 35;
 
-* All community leaders are obligated to respect the privacy and security of the
-  reporter of any incident.
+int absentReadings = 0;
+const int REQUIRED_ABSENT_READINGS = 3;
 
-## Enforcement Guidelines
+// ============================
+// SETUP
+// ============================
 
-* Community leaders will follow these Community Impact Guidelines in determining
-  the consequences for any action they deem in violation of this Code of Conduct:
+void setup() {
 
-### 1. Correction
+  Serial.begin(9600);
 
-**Community Impact**: Use of inappropriate language or other behavior deemed
-unprofessional or unwelcome in the community.
+  pinMode(RED_LED, OUTPUT);
+  pinMode(GREEN_LED, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
 
-**Consequence**: A private, written warning from community leaders, providing
-clarity around the nature of the violation and an explanation of why the
-behavior was inappropriate. A public apology may be requested.
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
 
-### 2. Warning
+  lockServo.attach(SERVO_PIN);
+  lockServo.write(0);
 
-**Community Impact**: A violation through a single incident or series of
-actions.
+  digitalWrite(RED_LED, HIGH);
+  digitalWrite(GREEN_LED, LOW);
 
-**Consequence**: A warning with consequences for continued behavior. No
-interaction with the people involved, including unsolicited interaction with
-those enforcing the Code of Conduct, for a specified period of time. This
-includes avoiding interactions in community spaces as well as external channels
-like social media. Violating these terms may lead to a temporary or permanent
-ban.
+  lcd.init();
+  lcd.backlight();
 
-### 3. Temporary Ban
+  lcd.setCursor(0, 0);
+  lcd.print("SMART SAFE BOX");
 
-**Community Impact**: A serious violation of community standards, including
-sustained inappropriate behavior.
+  lcd.setCursor(0, 1);
+  lcd.print("SYSTEM READY");
 
-**Consequence**: A temporary ban from any sort of interaction or public
-communication with the community for a specified period of time. No public or
-private interaction with the people involved, including unsolicited interaction
-with those enforcing the Code of Conduct, is allowed during this period.
-Violating these terms may lead to a permanent ban.
+  Serial.println("SMART SAFE BOX READY");
+  Serial.println("Password: 0000");
+  Serial.println("Distance and ADC-scale monitor");
 
-### 4. Permanent Ban
+  delay(2000);
 
-**Community Impact**: Demonstrating a pattern of violation of community
-standards, including sustained inappropriate behavior, harassment of an
-individual, or aggression toward or disparagement of classes of individuals.
+  lcd.clear();
+  lcd.noBacklight();
+}
 
-**Consequence**: A permanent ban from any sort of public interaction within the
-community.
+// ============================
+// MAIN LOOP
+// ============================
 
-## Attribution
+void loop() {
 
-This Code of Conduct is adapted from the [Contributor Covenant][homepage],
-version 2.1, available at
-[https://www.contributor-covenant.org/version/2/1/code_of_conduct.html][v2.1].
+  long distance = getDistance();
 
-Community Impact Guidelines were inspired by
-[Mozilla's code of conduct enforcement ladder][Mozilla CoC].
+  // SERIAL MONITOR
+  if (millis() - lastADCRead >= ADC_INTERVAL) {
 
-For answers to common questions about this code of conduct, see the FAQ at
-[https://www.contributor-covenant.org/faq][FAQ]. Translations are available at
-[https://www.contributor-covenant.org/translations][translations].
+    lastADCRead = millis();
 
-[homepage]: https://www.contributor-covenant.org
-[v2.1]: https://www.contributor-covenant.org/version/2/1/code_of_conduct.html
-[Mozilla CoC]: https://github.com/mozilla/diversity
-[FAQ]: https://www.contributor-covenant.org/faq
-[translations]: https://www.contributor-covenant.org/translations
+    int adcValue = getADCValue(distance);
+
+    Serial.print("Distance: ");
+
+    if (distance < 0) {
+      Serial.print("No echo");
+    } else {
+      Serial.print(distance);
+      Serial.print(" cm");
+    }
+
+    Serial.print(" | ADC-scale value: ");
+    Serial.println(adcValue);
+  }
+
+  // PERSON DETECTED WITHIN 35 CM
+  if (distance > 0 && distance <= DETECT_DISTANCE) {
+
+    absentReadings = 0;
+
+    if (personAwayWarning) {
+
+      personAwayWarning = false;
+      noTone(BUZZER_PIN);
+
+      if (safeUnlocked && !changingPIN) {
+
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("DOOR IS OPEN");
+
+        lcd.setCursor(0, 1);
+        lcd.print("# = LOCK");
+      }
+    }
+
+    if (leavingTimer) {
+
+      leavingTimer = false;
+
+      if (systemOn && !safeUnlocked) {
+        showPINScreen();
+      }
+    }
+
+    // TURN SYSTEM ON
+    if (!systemOn && !safeUnlocked) {
+
+      systemOn = true;
+
+      lcd.backlight();
+      lcd.clear();
+
+      lcd.setCursor(0, 0);
+      lcd.print("PERSON DETECTED");
+
+      lcd.setCursor(0, 1);
+      lcd.print("ENTER PIN");
+
+      tone(BUZZER_PIN, 1000, 100);
+    }
+
+    // ENTER PIN
+    if (systemOn && !safeUnlocked && !changingPIN) {
+      enterPIN();
+    }
+
+    // HANDLE UNLOCKED MODE
+    if (safeUnlocked) {
+      handleUnlockedMode();
+    }
+  }
+
+  // PERSON NOT DETECTED
+  else {
+
+    if (distance > DETECT_DISTANCE || distance == -1) {
+      if (absentReadings < REQUIRED_ABSENT_READINGS) {
+        absentReadings++;
+      }
+    }
+
+    // PERSON LEFT WHILE SAFE UNLOCKED
+    if (safeUnlocked &&
+        absentReadings >= REQUIRED_ABSENT_READINGS) {
+
+      if (!personAwayWarning) {
+
+        personAwayWarning = true;
+
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("PERSON LEFT");
+
+        lcd.setCursor(0, 1);
+        lcd.print("PRESS # TO LOCK");
+
+        lastWarningBeep = millis();
+
+        tone(BUZZER_PIN, 800, 300);
+      }
+
+      if (millis() - lastWarningBeep >= WARNING_INTERVAL) {
+
+        lastWarningBeep = millis();
+        tone(BUZZER_PIN, 800, 300);
+      }
+    }
+
+    // START LEAVING TIMER WHEN LOCKED
+    if (absentReadings >= REQUIRED_ABSENT_READINGS) {
+
+      if (systemOn && !safeUnlocked && !leavingTimer) {
+
+        leavingTimer = true;
+        leaveStartTime = millis();
+
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("PERSON LEFT");
+
+        lcd.setCursor(0, 1);
+        lcd.print("WAIT 5 SECONDS");
+      }
+    }
+
+    // SYSTEM OFF AFTER 5 SECONDS
+    if (leavingTimer &&
+        millis() - leaveStartTime >= OFF_DELAY) {
+
+      systemOn = false;
+      leavingTimer = false;
+      enteredPIN = "";
+
+      lcd.clear();
+      lcd.noBacklight();
+
+      noTone(BUZZER_PIN);
+
+      absentReadings = 0;
+    }
+  }
+}
+
+// ============================
+// ULTRASONIC SENSOR
+// ============================
+
+long getDistance() {
+
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+
+  if (duration == 0) {
+    return -1;
+  }
+
+  return duration * 0.034 / 2;
+}
+
+// ============================
+// DISTANCE TO ADC-SCALE VALUE
+// ============================
+
+int getADCValue(long distance) {
+
+  if (distance <= 0 || distance > 100) {
+    return 0;
+  }
+
+  return map(distance, 100, 1, 0, 1023);
+}
+
+// ============================
+// PIN SCREEN
+// ============================
+
+void showPINScreen() {
+
+  lcd.backlight();
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("PERSON DETECTED");
+
+  lcd.setCursor(0, 1);
+
+  if (enteredPIN.length() == 0) {
+    lcd.print("ENTER PIN");
+  } else {
+    for (int i = 0; i < enteredPIN.length(); i++) {
+      lcd.print("*");
+    }
+  }
+}
+
+// ============================
+// ENTER PIN
+// ============================
+
+void enterPIN() {
+
+  char key = keypad.getKey();
+
+  if (!key) return;
+
+  if (key >= '0' && key <= '9') {
+
+    if (enteredPIN.length() < 4) {
+
+      enteredPIN += key;
+
+      lcd.setCursor(0, 1);
+      lcd.print("                ");
+      lcd.setCursor(0, 1);
+
+      for (int i = 0; i < enteredPIN.length(); i++) {
+        lcd.print("*");
+      }
+
+      tone(BUZZER_PIN, 1000, 50);
+    }
+  }
+
+  else if (key == '*') {
+
+    enteredPIN = "";
+
+    lcd.setCursor(0, 1);
+    lcd.print("                ");
+    lcd.setCursor(0, 1);
+    lcd.print("ENTER PIN");
+
+    tone(BUZZER_PIN, 700, 50);
+  }
+
+  else if (key == '#') {
+
+    if (enteredPIN == correctPIN) {
+      accessGranted();
+    } else {
+      accessDenied();
+    }
+
+    enteredPIN = "";
+  }
+}
+
+// ============================
+// UNLOCKED MODE
+// ============================
+
+void handleUnlockedMode() {
+
+  char key = keypad.getKey();
+
+  if (!key) return;
+
+  // # = CLOSE AND LOCK
+  if (key == '#') {
+    lockSafe();
+    return;
+  }
+
+  // B = CHANGE PASSWORD
+  if (key == 'B' && !changingPIN) {
+
+    changingPIN = true;
+    newPIN = "";
+    personAwayWarning = false;
+
+    noTone(BUZZER_PIN);
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("CHANGE PASSWORD");
+
+    lcd.setCursor(0, 1);
+    lcd.print("NEW PIN:");
+
+    tone(BUZZER_PIN, 1200, 100);
+    return;
+  }
+
+  if (changingPIN) {
+
+    if (key >= '0' && key <= '9') {
+
+      if (newPIN.length() < 4) {
+
+        newPIN += key;
+
+        lcd.setCursor(0, 1);
+        lcd.print("                ");
+        lcd.setCursor(0, 1);
+        lcd.print("NEW:");
+
+        for (int i = 0; i < newPIN.length(); i++) {
+          lcd.print("*");
+        }
+
+        tone(BUZZER_PIN, 1000, 50);
+      }
+    }
+
+    else if (key == '*') {
+
+      newPIN = "";
+
+      lcd.setCursor(0, 1);
+      lcd.print("                ");
+      lcd.setCursor(0, 1);
+      lcd.print("NEW PIN:");
+
+      tone(BUZZER_PIN, 700, 50);
+    }
+
+    else if (key == '#') {
+
+      if (newPIN.length() == 4) {
+
+        correctPIN = newPIN;
+
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("PASSWORD CHANGED");
+
+        lcd.setCursor(0, 1);
+        lcd.print("SUCCESSFULLY");
+
+        tone(BUZZER_PIN, 1200, 150);
+        delay(200);
+        tone(BUZZER_PIN, 1500, 150);
+        delay(1500);
+
+        changingPIN = false;
+        newPIN = "";
+
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("DOOR IS OPEN");
+
+        lcd.setCursor(0, 1);
+        lcd.print("# = LOCK");
+      }
+
+      else {
+
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("INVALID PASSWORD");
+
+        lcd.setCursor(0, 1);
+        lcd.print("4 DIGITS REQUIRED");
+
+        tone(BUZZER_PIN, 500, 300);
+        delay(1200);
+
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("CHANGE PASSWORD");
+
+        lcd.setCursor(0, 1);
+        lcd.print("NEW PIN:");
+      }
+    }
+  }
+}
+
+// ============================
+// ACCESS GRANTED
+// ============================
+
+void accessGranted() {
+
+  safeUnlocked = true;
+  systemOn = true;
+
+  leavingTimer = false;
+  personAwayWarning = false;
+
+  lcd.backlight();
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("ACCESS GRANTED");
+
+  lcd.setCursor(0, 1);
+  lcd.print("DOOR UNLOCKED");
+
+  tone(BUZZER_PIN, 1000, 150);
+  delay(200);
+  tone(BUZZER_PIN, 1500, 150);
+
+  lockServo.write(90);
+
+  digitalWrite(RED_LED, LOW);
+  digitalWrite(GREEN_LED, HIGH);
+
+  delay(1500);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("DOOR IS OPEN");
+
+  lcd.setCursor(0, 1);
+  lcd.print("# = LOCK");
+}
+
+// ============================
+// ACCESS DENIED
+// ============================
+
+void accessDenied() {
+
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("ACCESS DENIED");
+
+  lcd.setCursor(0, 1);
+  lcd.print("WRONG PIN");
+
+  digitalWrite(RED_LED, HIGH);
+  digitalWrite(GREEN_LED, LOW);
+
+  for (int i = 0; i < 3; i++) {
+    tone(BUZZER_PIN, 500, 300);
+    delay(400);
+  }
+
+  noTone(BUZZER_PIN);
+  delay(500);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("TRY AGAIN");
+
+  lcd.setCursor(0, 1);
+  lcd.print("ENTER PIN");
+}
+
+// ============================
+// LOCK SAFE
+// ============================
+
+void lockSafe() {
+
+  personAwayWarning = false;
+  noTone(BUZZER_PIN);
+
+  lcd.backlight();
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print("DOOR CONFIRMED");
+
+  lcd.setCursor(0, 1);
+  lcd.print("LOCKING...");
+
+  delay(500);
+
+  lockServo.write(0);
+
+  digitalWrite(GREEN_LED, LOW);
+  digitalWrite(RED_LED, HIGH);
+
+  tone(BUZZER_PIN, 700, 200);
+  delay(500);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("SAFE LOCKED");
+
+  lcd.setCursor(0, 1);
+  lcd.print("SYSTEM READY");
+
+  safeUnlocked = false;
+  systemOn = false;
+  leavingTimer = false;
+  changingPIN = false;
+
+  enteredPIN = "";
+  newPIN = "";
+
+  delay(1500);
+
+  lcd.clear();
+  lcd.noBacklight();
+
+  absentReadings = 0;
+}
